@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Article Download - Wikispeech</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #7f8c8d;
+            margin-bottom: 30px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        
+        input[type="text"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        
+        textarea {
+            min-height: 150px;
+            resize: vertical;
+        }
+        
+        .input-hint {
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            margin-bottom: 20px;
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 16px;
+            color: #7f8c8d;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        
+        .tab.active {
+            color: #3498db;
+            border-bottom-color: #3498db;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .params-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .btn-primary {
+            background-color: #3498db;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #2980b9;
+        }
+        
+        .btn-primary:disabled {
+            background-color: #95a5a6;
+            cursor: not-allowed;
+        }
+        
+        .btn-secondary {
+            background-color: #95a5a6;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background-color: #7f8c8d;
+        }
+        
+        .message {
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .message.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .message.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        
+        .download-item {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+        }
+        
+        .download-info h3 {
+            margin: 0 0 5px 0;
+            color: #2c3e50;
+        }
+        
+        .download-details {
+            font-size: 13px;
+            color: #7f8c8d;
+            margin: 5px 0;
+        }
+        
+        .download-params {
+            font-size: 12px;
+            color: #95a5a6;
+        }
+        
+        .download-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            margin-left: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f3f3f3;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        
+        .progress-bar-fill {
+            height: 100%;
+            background-color: #3498db;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>📥 Article Download</h1>
+    <p class="subtitle">Convert Wikipedia articles to downloadable audio files</p>
+    
+    <div class="container">
+        <h2>Article Source</h2>
+        <div class="tabs">
+            <button class="tab active" data-tab="text">Text Input</button>
+            <button class="tab" data-tab="url">Wikipedia URL</button>
+        </div>
+        
+        <div class="tab-content active" id="text-tab">
+            <div class="form-group">
+                <label for="article-title">Article Title</label>
+                <input type="text" id="article-title" placeholder="Enter article title">
+            </div>
+            <div class="form-group">
+                <label for="article-text">Article Text</label>
+                <textarea id="article-text" placeholder="Paste article text here..."></textarea>
+                <div class="input-hint">Paste the article content you want to convert to audio</div>
+            </div>
+        </div>
+        
+        <div class="tab-content" id="url-tab">
+            <div class="form-group">
+                <label for="article-url">Wikipedia/MediaWiki URL</label>
+                <input type="text" id="article-url" placeholder="https://en.wikipedia.org/wiki/Article_Name">
+                <div class="input-hint">Enter a Wikipedia or MediaWiki article URL</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <h2>Audio Parameters</h2>
+        <div class="params-grid">
+            <div class="form-group">
+                <label for="lang">Language</label>
+                <select id="lang">
+                    <option value="">Select language...</option>
+                    {% for lang in languages %}
+                    <option value="{{ lang }}">{{ lang }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="voice">Voice</label>
+                <select id="voice">
+                    <option value="">Select voice...</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="speed">Speed</label>
+                <input type="number" id="speed" value="1.0" min="0.5" max="2.0" step="0.1">
+            </div>
+            
+            <div class="form-group">
+                <label for="pitch">Pitch</label>
+                <input type="number" id="pitch" value="1.0" min="0.5" max="2.0" step="0.1">
+            </div>
+            
+            <div class="form-group">
+                <label for="volume">Volume</label>
+                <input type="number" id="volume" value="1.0" min="0.1" max="2.0" step="0.1">
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div id="message-area"></div>
+        
+        <button class="btn btn-primary" id="check-btn">
+            Check for Existing Download
+        </button>
+        
+        <button class="btn btn-secondary" id="request-btn" style="margin-left: 10px;">
+            Request New Download
+        </button>
+        
+        <div id="progress-area" class="hidden">
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progress-fill">Processing...</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container" id="existing-downloads-container" style="display: none;">
+        <h2>Existing Downloads</h2>
+        <div id="existing-downloads"></div>
+    </div>
+    
+    <script>
+        // Voice data from server
+        const voicesByLang = {{ voices_by_lang | tojson }};
+        
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const targetTab = tab.dataset.tab;
+                
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                
+                tab.classList.add('active');
+                document.getElementById(targetTab + '-tab').classList.add('active');
+            });
+        });
+        
+        // Language change updates voice options
+        document.getElementById('lang').addEventListener('change', function() {
+            const lang = this.value;
+            const voiceSelect = document.getElementById('voice');
+            
+            voiceSelect.innerHTML = '<option value="">Select voice...</option>';
+            
+            if (lang && voicesByLang[lang]) {
+                voicesByLang[lang].forEach(voice => {
+                    const option = document.createElement('option');
+                    option.value = voice;
+                    option.textContent = voice;
+                    voiceSelect.appendChild(option);
+                });
+            }
+        });
+        
+        // Show message
+        function showMessage(message, type = 'info') {
+            const messageArea = document.getElementById('message-area');
+            messageArea.innerHTML = `<div class="message ${type}">${message}</div>`;
+        }
+        
+        // Clear message
+        function clearMessage() {
+            document.getElementById('message-area').innerHTML = '';
+        }
+        
+        // Get current input data
+        function getInputData() {
+            const activeTab = document.querySelector('.tab.active').dataset.tab;
+            const data = {
+                params: {
+                    lang: document.getElementById('lang').value,
+                    voice: document.getElementById('voice').value,
+                    speed: parseFloat(document.getElementById('speed').value),
+                    pitch: parseFloat(document.getElementById('pitch').value),
+                    volume: parseFloat(document.getElementById('volume').value)
+                }
+            };
+            
+            if (activeTab === 'text') {
+                data.content = document.getElementById('article-text').value;
+                data.title = document.getElementById('article-title').value || 'Untitled';
+            } else {
+                data.url = document.getElementById('article-url').value;
+            }
+            
+            return data;
+        }
+        
+        // Validate input
+        function validateInput(data) {
+            if (!data.content && !data.url) {
+                showMessage('Please provide article text or URL', 'error');
+                return false;
+            }
+            
+            if (!data.params.lang) {
+                showMessage('Please select a language', 'error');
+                return false;
+            }
+            
+            if (!data.params.voice) {
+                showMessage('Please select a voice', 'error');
+                return false;
+            }
+            
+            return true;
+        }
+        
+        // Display download item
+        function displayDownload(download, isNew = false) {
+            const container = document.getElementById('existing-downloads');
+            const containerDiv = document.getElementById('existing-downloads-container');
+            
+            const sizeMB = (download.size_bytes / 1024 / 1024).toFixed(2);
+            const created = new Date(download.created).toLocaleString();
+            
+            const item = document.createElement('div');
+            item.className = 'download-item';
+            item.innerHTML = `
+                <div class="download-info">
+                    <h3>${download.title} ${isNew ? '<span style="color: #27ae60;">✓ NEW</span>' : ''}</h3>
+                    <div class="download-details">
+                        <strong>Size:</strong> ${sizeMB} MB | 
+                        <strong>Created:</strong> ${created}
+                    </div>
+                    <div class="download-params">
+                        Language: ${download.params.lang} | 
+                        Voice: ${download.params.voice} | 
+                        Speed: ${download.params.speed} | 
+                        Pitch: ${download.params.pitch} | 
+                        Volume: ${download.params.volume}
+                    </div>
+                </div>
+                <div class="download-actions">
+                    <a href="/download/${download.id}" class="btn btn-primary" download>Download</a>
+                </div>
+            `;
+            
+            if (isNew) {
+                container.insertBefore(item, container.firstChild);
+            } else {
+                container.appendChild(item);
+            }
+            
+            containerDiv.style.display = 'block';
+        }
+        
+        // Check for existing download
+        document.getElementById('check-btn').addEventListener('click', async function() {
+            clearMessage();
+            const data = getInputData();
+            
+            if (!validateInput(data)) {
+                return;
+            }
+            
+            this.disabled = true;
+            this.innerHTML = 'Checking... <span class="spinner"></span>';
+            
+            try {
+                const response = await fetch('/api/download/check', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    if (result.exists) {
+                        showMessage('✓ Download already exists!', 'success');
+                        displayDownload(result.download);
+                    } else {
+                        showMessage('No existing download found. Click "Request New Download" to create one.', 'info');
+                    }
+                } else {
+                    showMessage('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showMessage('Network error: ' + error.message, 'error');
+            } finally {
+                this.disabled = false;
+                this.innerHTML = 'Check for Existing Download';
+            }
+        });
+        
+        // Request new download
+        document.getElementById('request-btn').addEventListener('click', async function() {
+            clearMessage();
+            const data = getInputData();
+            
+            if (!validateInput(data)) {
+                return;
+            }
+            
+            this.disabled = true;
+            document.getElementById('check-btn').disabled = true;
+            this.innerHTML = 'Processing... <span class="spinner"></span>';
+            
+            const progressArea = document.getElementById('progress-area');
+            progressArea.classList.remove('hidden');
+            
+            try {
+                const response = await fetch('/api/download/request', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showMessage('✓ Download created successfully!', 'success');
+                    displayDownload(result.download, true);
+                    
+                    // Clear form
+                    document.getElementById('article-text').value = '';
+                    document.getElementById('article-url').value = '';
+                    document.getElementById('article-title').value = '';
+                } else {
+                    showMessage('Error: ' + result.error, 'error');
+                }
+            } catch (error) {
+                showMessage('Network error: ' + error.message, 'error');
+            } finally {
+                this.disabled = false;
+                document.getElementById('check-btn').disabled = false;
+                this.innerHTML = 'Request New Download';
+                progressArea.classList.add('hidden');
+            }
+        });
+    </script>
+</body>
+</html>

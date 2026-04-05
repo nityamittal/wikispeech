@@ -745,7 +745,7 @@ def convertTokenTimingsToMilliseconds(tokens):
 ############################################
 #
 #  serve the audio file if needed (should usually be behind proxy)
-from flask import send_from_directory
+from flask import send_from_directory, send_file, jsonify
 
 @app.route('/audio/<path:path>')
 def static_proxy_audio(path):
@@ -768,6 +768,33 @@ def static_test():
     #hostname = "http://localhost:10000"
     hostname = request.url_root
     return render_template("test.html", server=hostname)
+
+
+@app.route('/download')
+@app.route('/download.html')
+def download_page():
+    """Render the article download UI."""
+    log.info("Rendering download page")
+    
+    # Get available languages
+    languages = sorted(set(v.lang for v in voices))
+    
+    # Group voices by language
+    voices_by_lang = {}
+    for v in voices:
+        if v.lang not in voices_by_lang:
+            voices_by_lang[v.lang] = []
+        voices_by_lang[v.lang].append(v.name)
+    
+    # Sort voice names
+    for lang in voices_by_lang:
+        voices_by_lang[lang].sort()
+    
+    return render_template(
+        "download.html",
+        languages=languages,
+        voices_by_lang=voices_by_lang
+    )
 
 
 @app.route('/wikispeech_simple_player.js')
@@ -803,6 +830,327 @@ def lexserver_proxy(url):
     log.info("Lexserver proxy to: %s" % redirect_url)
     req = requests.get(redirect_url, stream = True)
     return Response(stream_with_context(req.iter_content()), content_type = req.headers['content-type'])
+
+
+##############################################
+#
+#   Article Download API
+#
+##############################################
+
+from wikispeech_server.download_manager import DownloadManager
+from wikispeech_server.article_fetcher import ArticleFetcher
+
+# Initialize download manager
+download_manager = None
+article_fetcher = None
+
+def get_download_manager():
+    """Get or create download manager instance."""
+    global download_manager
+    if download_manager is None:
+        download_dir = config.config.get("Downloads", "download_dir")
+        download_manager = DownloadManager(download_dir)
+    return download_manager
+
+def get_article_fetcher():
+    """Get or create article fetcher instance."""
+    global article_fetcher
+    if article_fetcher is None:
+        article_fetcher = ArticleFetcher()
+    return article_fetcher
+
+
+@app.route('/api/download/check', methods=['POST'])
+def check_download():
+    """
+    Check if a download exists for given content and parameters.
+    
+    Request JSON:
+        {
+            "content": "article text" or "url": "article URL",
+            "title": "Article Title",
+            "params": {
+                "lang": "en",
+                "voice": "voice_name",
+                "speed": 1.0,
+                "pitch": 1.0,
+                "volume": 1.0
+            }
+        }
+    
+    Response JSON:
+        {
+            "exists": true/false,
+            "download": {...} or null
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        # Get content from text or URL
+        content = None
+        title = data.get('title', 'Untitled')
+        
+        if 'url' in data:
+            fetcher = get_article_fetcher()
+            article = fetcher.fetch_article(data['url'])
+            content = article['text']
+            title = article['title']
+        elif 'content' in data:
+            content = data['content']
+        else:
+            return jsonify({"error": "Either 'content' or 'url' must be provided"}), 400
+        
+        params = data.get('params', {})
+        
+        # Validate required params
+        if 'lang' not in params or 'voice' not in params:
+            return jsonify({"error": "Parameters must include 'lang' and 'voice'"}), 400
+        
+        # Generate hash
+        dm = get_download_manager()
+        content_hash = dm.generate_hash(content, params)
+        
+        # Check if exists
+        download = dm.find_download(content_hash)
+        
+        if download:
+            return jsonify({
+                "exists": True,
+                "download": download
+            })
+        else:
+            return jsonify({
+                "exists": False,
+                "download": None
+            })
+    
+    except Exception as e:
+        log.error(f"Error in check_download: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/download/request', methods=['POST'])
+def request_download():
+    """
+    Request a new article download.
+    
+    Generates audio for all paragraphs, concatenates them, converts to MP3.
+    
+    Request JSON:
+        {
+            "content": "article text" or "url": "article URL",
+            "title": "Article Title",
+            "params": {
+                "lang": "en",
+                "voice": "voice_name",
+                "speed": 1.0,
+                "pitch": 1.0,
+                "volume": 1.0
+            }
+        }
+    
+    Response JSON:
+        {
+            "success": true,
+            "download": {...}
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+        
+        # Get content from text or URL
+        content = None
+        title = data.get('title', 'Untitled')
+        
+        if 'url' in data:
+            fetcher = get_article_fetcher()
+            article = fetcher.fetch_article(data['url'])
+            content = article['text']
+            title = article['title']
+        elif 'content' in data:
+            content = data['content']
+        else:
+            return jsonify({"error": "Either 'content' or 'url' must be provided"}), 400
+        
+        params = data.get('params', {})
+        
+        # Validate required params
+        lang = params.get('lang')
+        voice_name = params.get('voice')
+        
+        if not lang or not voice_name:
+            return jsonify({"error": "Parameters must include 'lang' and 'voice'"}), 400
+        
+        # Check if already exists
+        dm = get_download_manager()
+        content_hash = dm.generate_hash(content, params)
+        existing = dm.find_download(content_hash)
+        
+        if existing:
+            return jsonify({
+                "success": True,
+                "download": existing,
+                "message": "Download already exists"
+            })
+        
+        # Split content into paragraphs
+        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+        
+        if not paragraphs:
+            return jsonify({"error": "No content to synthesize"}), 400
+        
+        log.info(f"Processing {len(paragraphs)} paragraphs for download")
+        
+        # Generate audio for each paragraph
+        tmpdir = config.config.get("Audio settings", "audio_tmpdir")
+        audio_files = []
+        
+        try:
+            for i, paragraph in enumerate(paragraphs):
+                log.debug(f"Synthesizing paragraph {i+1}/{len(paragraphs)}")
+                
+                # First convert text to markup using textproc
+                markup = textproc(
+                    lang=lang,
+                    textprocessor_name="default_textprocessor",
+                    text=paragraph,
+                    input_type='text'
+                )
+                
+                # Check if textproc returned an error string
+                if isinstance(markup, str):
+                    raise ValueError(f"Text processing failed: {markup}")
+                
+                # Now synthesize with markup input
+                result = synthesise(
+                    lang=lang,
+                    voice_name=voice_name,
+                    input=markup,
+                    input_type='markup',
+                    output_type='json',
+                    hostname=request.url_root
+                )
+                
+                # Check if synthesise returned an error string
+                if isinstance(result, str):
+                    raise ValueError(f"Synthesis failed: {result}")
+                
+                # Decode opus audio from base64
+                audio_data = base64.b64decode(result['audio_data'])
+                temp_opus = os.path.join(tmpdir, f"download_temp_{os.getpid()}_{i}.opus")
+                
+                with open(temp_opus, 'wb') as f:
+                    f.write(audio_data)
+                
+                audio_files.append(temp_opus)
+            
+            # Concatenate all audio files
+            download_dir = config.config.get("Downloads", "download_dir")
+            os.makedirs(os.path.join(download_dir, "files"), exist_ok=True)
+            
+            output_mp3 = os.path.join(download_dir, "files", f"{content_hash[:16]}.mp3")
+            
+            log.info(f"Concatenating {len(audio_files)} audio files to MP3")
+            concatenateAudioFiles(audio_files, output_mp3, format='mp3')
+            
+            # Get file size
+            file_size = os.path.getsize(output_mp3)
+            
+            # Check max file size limit
+            max_size_mb = config.config.getint("Downloads", "max_download_size_mb")
+            if max_size_mb > 0 and file_size > max_size_mb * 1024 * 1024:
+                os.unlink(output_mp3)
+                return jsonify({
+                    "error": f"Generated file ({file_size / 1024 / 1024:.1f} MB) exceeds maximum allowed size ({max_size_mb} MB)"
+                }), 413
+            
+            # Add to metadata
+            relative_path = f"files/{content_hash[:16]}.mp3"
+            download = dm.add_download(
+                title=title,
+                content_hash=content_hash,
+                params=params,
+                file_path=relative_path,
+                size_bytes=file_size
+            )
+            
+            log.info(f"Download created: {download['id']}")
+            
+            return jsonify({
+                "success": True,
+                "download": download
+            })
+            
+        finally:
+            # Clean up temporary files
+            for temp_file in audio_files:
+                try:
+                    if os.path.exists(temp_file):
+                        os.unlink(temp_file)
+                except OSError:
+                    pass
+    
+    except Exception as e:
+        log.error(f"Error in request_download: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/download/<download_id>')
+def serve_download(download_id):
+    """
+    Serve a download file.
+    
+    Args:
+        download_id: Download ID
+        
+    Returns:
+        MP3 file with appropriate headers
+    """
+    try:
+        dm = get_download_manager()
+        file_path = dm.get_file_path(download_id)
+        
+        if not file_path or not file_path.exists():
+            return jsonify({"error": "Download not found"}), 404
+        
+        # Get download metadata for filename
+        metadata = dm._load_metadata()
+        download = None
+        for d in metadata["downloads"]:
+            if d["id"] == download_id:
+                download = d
+                break
+        
+        # Create safe filename
+        if download:
+            title = download.get("title", "article")
+            # Remove unsafe characters
+            safe_title = re.sub(r'[^\w\s-]', '', title).strip()
+            safe_title = re.sub(r'[-\s]+', '-', safe_title)
+            filename = f"{safe_title}.mp3"
+        else:
+            filename = f"{download_id}.mp3"
+        
+        return send_file(
+            file_path,
+            mimetype='audio/mpeg',
+            as_attachment=True,
+            download_name=filename
+        )
+    
+    except Exception as e:
+        log.error(f"Error in serve_download: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 ###############
@@ -1064,6 +1412,133 @@ def saveAndConvertAudio(audio_url):
     
 
     return (opus_url_suffix, audio_data)
+
+
+def convertToMP3(input_audio_path, output_mp3_path):
+    """
+    Convert audio file to MP3 format using ffmpeg.
+    
+    Args:
+        input_audio_path: Path to input audio file (WAV, Opus, etc.)
+        output_mp3_path: Path to output MP3 file
+        
+    Returns:
+        True if successful, False otherwise
+        
+    Raises:
+        RuntimeError: If ffmpeg is not found or conversion fails
+    """
+    # Check if ffmpeg is available
+    try:
+        subprocess.run(['ffmpeg', '-version'], 
+                      stdout=subprocess.PIPE, 
+                      stderr=subprocess.PIPE, 
+                      check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raise RuntimeError(
+            "ffmpeg not found. Please install ffmpeg:\n"
+            "  Ubuntu/Debian: sudo apt install ffmpeg\n"
+            "  macOS: brew install ffmpeg\n"
+            "  Windows: Download from https://ffmpeg.org/"
+        )
+    
+    # Convert to MP3 with good quality settings
+    cmd = [
+        'ffmpeg',
+        '-i', input_audio_path,
+        '-codec:a', 'libmp3lame',
+        '-qscale:a', '2',  # High quality (0-9, lower is better)
+        '-y',  # Overwrite output file
+        output_mp3_path
+    ]
+    
+    # Run quietly unless in debug mode
+    if log.log_level != "debug":
+        cmd.insert(1, '-loglevel')
+        cmd.insert(2, 'error')
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        log.debug(f"MP3 conversion successful: {output_mp3_path}")
+        return True
+    except subprocess.CalledProcessError as e:
+        log.error(f"MP3 conversion failed: {e.stderr}")
+        raise RuntimeError(f"MP3 conversion failed: {e.stderr}")
+
+
+def concatenateAudioFiles(audio_files, output_path, format='mp3'):
+    """
+    Concatenate multiple audio files into one.
+    
+    Args:
+        audio_files: List of paths to audio files to concatenate
+        output_path: Path to output file
+        format: Output format ('mp3', 'wav', etc.)
+        
+    Returns:
+        True if successful
+        
+    Raises:
+        RuntimeError: If ffmpeg is not found or concatenation fails
+    """
+    if not audio_files:
+        raise ValueError("No audio files provided for concatenation")
+    
+    if len(audio_files) == 1:
+        # Just copy/convert the single file
+        if format == 'mp3':
+            convertToMP3(audio_files[0], output_path)
+        else:
+            import shutil
+            shutil.copy(audio_files[0], output_path)
+        return True
+    
+    # Create temporary file list for ffmpeg concat
+    tmpdir = config.config.get("Audio settings", "audio_tmpdir")
+    concat_list_file = os.path.join(tmpdir, f"concat_list_{os.getpid()}.txt")
+    
+    try:
+        # Write file list in ffmpeg concat format
+        with open(concat_list_file, 'w') as f:
+            for audio_file in audio_files:
+                # Escape single quotes in filenames
+                escaped_path = audio_file.replace("'", "'\\''")
+                f.write(f"file '{escaped_path}'\n")
+        
+        # Concatenate using ffmpeg
+        cmd = [
+            'ffmpeg',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', concat_list_file,
+            '-c', 'copy' if format != 'mp3' else 'libmp3lame',
+            '-y',
+            output_path
+        ]
+        
+        if format == 'mp3':
+            # For MP3, use encoding instead of copy
+            cmd[6] = '-codec:a'
+            cmd[7] = 'libmp3lame'
+            cmd.extend(['-qscale:a', '2'])
+        
+        if log.log_level != "debug":
+            cmd.insert(1, '-loglevel')
+            cmd.insert(2, 'error')
+        
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        log.debug(f"Audio concatenation successful: {output_path}")
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        log.error(f"Audio concatenation failed: {e.stderr}")
+        raise RuntimeError(f"Audio concatenation failed: {e.stderr}")
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(concat_list_file)
+        except OSError:
+            pass
 
 
 def getTestExample(lang):

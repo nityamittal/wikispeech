@@ -1,7 +1,7 @@
 import configparser
 import sys, getpass, os, os.path
 
-config = configparser.SafeConfigParser()
+config = configparser.ConfigParser()
 
 print("\nCONFIG\n\nChecking for default and user config files..")
 
